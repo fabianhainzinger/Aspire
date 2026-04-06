@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AdditionalPackageTags>garage s3 object-storage hosting self-hosted</AdditionalPackageTags>
+    <Description>An Aspire hosting integration for Garage, a lightweight S3-compatible object storage server. Automatically provisions layout and access keys on container startup.</Description>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" />
+  </ItemGroup>
+
+</Project>
