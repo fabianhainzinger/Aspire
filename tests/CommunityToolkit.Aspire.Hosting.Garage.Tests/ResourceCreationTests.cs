@@ -132,6 +132,24 @@ public class ResourceCreationTests
     }
 
     [Fact]
+    public void GarageResourceHasProvisioningHealthCheck()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+
+        builder.AddGarage("garage");
+
+        using var app = builder.Build();
+
+        var resource = app.Services.GetRequiredService<DistributedApplicationModel>()
+                          .Resources.OfType<GarageContainerResource>().Single();
+
+        var result = resource.TryGetAnnotationsOfType<HealthCheckAnnotation>(out var annotations);
+
+        Assert.True(result);
+        Assert.Single(annotations!);
+    }
+
+    [Fact]
     public void GarageResourceWithRegionAddsExtraEnvironmentAnnotation()
     {
         var builder = DistributedApplication.CreateBuilder();

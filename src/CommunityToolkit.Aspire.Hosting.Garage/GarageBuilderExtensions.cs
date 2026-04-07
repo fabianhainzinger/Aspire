@@ -3,6 +3,7 @@
 using Aspire.Hosting.ApplicationModel;
 using CommunityToolkit.Aspire.Hosting.Garage;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Aspire.Hosting;
 
@@ -58,8 +59,11 @@ public static class GarageBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrEmpty(name);
 
+        // Access key IDs must be alphanumeric for S3 SigV4 signing compatibility.
+        // Disable lowercase letters and special characters so only A-Z and 0-9 are used.
         var accessKeyIdParam = accessKeyId?.Resource
-            ?? ParameterResourceBuilderExtensions.CreateDefaultPasswordParameter(builder, $"{name}-accessKeyId");
+            ?? ParameterResourceBuilderExtensions.CreateDefaultPasswordParameter(
+                builder, $"{name}-accessKeyId", lower: false, special: false);
         var secretKeyParam = secretAccessKey?.Resource
             ?? ParameterResourceBuilderExtensions.CreateDefaultPasswordParameter(builder, $"{name}-secretAccessKey");
         var adminTokenParam =
@@ -67,7 +71,7 @@ public static class GarageBuilderExtensions
 
         var resource = new GarageContainerResource(name, accessKeyIdParam, secretKeyParam);
 
-        return builder
+        var resourceBuilder = builder
             .AddResource(resource)
             .WithImage(GarageContainerImageTags.Image, GarageContainerImageTags.Tag)
             .WithImageRegistry(GarageContainerImageTags.Registry)
@@ -77,6 +81,33 @@ public static class GarageBuilderExtensions
             .WithEnvironment("GARAGE_ADMIN_TOKEN", $"{adminTokenParam}")
             .WithEntrypoint("/bin/sh")
             .WithArgs("-c", StartupCommand);
+
+        // Capture resolved credentials when the connection string becomes available.
+        // The health check closures read these fields; null means the event has not fired yet.
+        string? resolvedAdminToken = null, resolvedAccessKeyId = null, resolvedSecretKey = null;
+        builder.Eventing.Subscribe<ConnectionStringAvailableEvent>(resource, async (@event, ct) =>
+        {
+            resolvedAdminToken  = await ReferenceExpression.Create($"{adminTokenParam}").GetValueAsync(ct);
+            resolvedAccessKeyId = await ReferenceExpression.Create($"{resource.AccessKeyId}").GetValueAsync(ct);
+            resolvedSecretKey   = await ReferenceExpression.Create($"{resource.SecretAccessKey}").GetValueAsync(ct);
+        });
+
+        var adminEndpoint   = resource.GetEndpoint(GarageContainerResource.AdminEndpointName);
+        var healthCheckKey  = $"{name}_garage_provisioning";
+
+        builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
+            healthCheckKey,
+            _ => new GarageProvisioningHealthCheck(
+                adminEndpoint,
+                () => resolvedAdminToken,
+                () => resolvedAccessKeyId,
+                () => resolvedSecretKey,
+                name),
+            failureStatus: default,
+            tags: default,
+            timeout: default));
+
+        return resourceBuilder.WithHealthCheck(healthCheckKey);
     }
 
     /// <summary>
