@@ -1,0 +1,14 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.2.0">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <UserSecretsId>b4762f3b-383f-4001-96b3-f9c6e3f2652b</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\CommunityToolkit.Aspire.Hosting.Garage\CommunityToolkit.Aspire.Hosting.Garage.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\CommunityToolkit.Aspire.Hosting.Garage.ApiService\CommunityToolkit.Aspire.Hosting.Garage.ApiService.csproj" />
+    <ProjectReference Include="..\CommunityToolkit.Aspire.Hosting.Garage.Web\CommunityToolkit.Aspire.Hosting.Garage.Web.csproj" />
+  </ItemGroup>
+
+</Project>

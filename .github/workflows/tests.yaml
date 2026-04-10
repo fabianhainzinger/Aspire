@@ -33,6 +33,7 @@ jobs:
             Hosting.Elasticsearch.Extensions.Tests,
             Hosting.Flagd.Tests,
             Hosting.Flyway.Tests,
+            Hosting.Garage.Tests,
             Hosting.GoFeatureFlag.Tests,
             Hosting.Golang.Tests,
             Hosting.JavaScript.Extensions.Tests,
@@ -69,6 +70,7 @@ jobs:
             Hosting.Zitadel.Tests,
 
             # Client integration tests
+            Garage.Tests,
             GoFeatureFlag.Tests,
             KurrentDB.Tests,
             MassTransit.RabbitMQ.Tests,

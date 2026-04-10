@@ -4,6 +4,7 @@ using Aspire.Hosting.ApplicationModel;
 using CommunityToolkit.Aspire.Hosting.Garage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using System.Security.Cryptography;
 
 namespace Aspire.Hosting;
 
@@ -13,20 +14,9 @@ namespace Aspire.Hosting;
 public static class GarageBuilderExtensions
 {
     // Stable 64-character hex string used as RPC secret for single-node dev use.
-    // Garage requires this for inter-node communication; in a single-node setup any valid 32-byte value works.
-    private const string DevRpcSecret = "19f4840a892b4dfce05e8c2f87de8888b9c4ab09c9c00834a6ed5b9b8a43f2b";
-
-    // Name of the env var that the startup shell script reads to set the S3 region in the config file.
-    // Not a native Garage env var — used only by the generated init script.
-    internal const string RegionEnvVarName = "GARAGE_INIT_S3_REGION";
-
-    // Shell script injected as the container command.
-    // Writes a minimal garage.toml using printf (available on Alpine/BusyBox),
-    // then exec's the daemon. GARAGE_RPC_SECRET and GARAGE_ADMIN_TOKEN are
-    // read directly by Garage from the environment so they do not appear here.
-    // The s3_region is filled from GARAGE_INIT_S3_REGION, defaulting to "garage".
-    private const string StartupCommand =
-        @"printf 'metadata_dir = ""/var/lib/garage/meta""\ndata_dir = ""/var/lib/garage/data""\ndb_engine = ""sqlite""\nreplication_factor = 1\nrpc_bind_addr = ""[::]:3901""\nrpc_public_addr = ""127.0.0.1:3901""\n\n[s3_api]\napi_bind_addr = ""[::]:3900""\ns3_region = ""%s""\n\n[admin]\napi_bind_addr = ""[::]:3903""\n' ${GARAGE_INIT_S3_REGION:-garage} > /tmp/garage.toml && exec /garage --config /tmp/garage.toml server";
+    // Garage requires exactly 32 bytes (64 hex chars) for inter-node authentication.
+    // In a single-node setup any valid 32-byte value works.
+    private const string DevRpcSecret = "5a6e3ab4c9f2d1e8b7a0c5f3d2e6b9a8c4f7d3e1b6a0c8f2d5e9b3a7c1f4d8e2";
 
     /// <summary>
     /// Adds a Garage container resource to the application model.
@@ -59,17 +49,28 @@ public static class GarageBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrEmpty(name);
 
-        // Access key IDs must be alphanumeric for S3 SigV4 signing compatibility.
-        // Disable lowercase letters and special characters so only A-Z and 0-9 are used.
+        // Garage requires key IDs in the format: "GK" + 24 lowercase hex chars (12 random bytes).
+        // Secret keys must be exactly 64 lowercase hex chars (32 random bytes).
+        // Admin token can be any string but must be stable across the app run (the same value must
+        // reach both the container env var and the health-check closure).
+        // Pre-generate all three at AddGarage call time so each lambda captures a stable value.
+        var autoKeyId     = "GK" + Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+        var autoSecretKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        var autoAdminToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         var accessKeyIdParam = accessKeyId?.Resource
-            ?? ParameterResourceBuilderExtensions.CreateDefaultPasswordParameter(
-                builder, $"{name}-accessKeyId", lower: false, special: false);
+            ?? new ParameterResource($"{name}-accessKeyId", _ => autoKeyId, secret: false);
         var secretKeyParam = secretAccessKey?.Resource
-            ?? ParameterResourceBuilderExtensions.CreateDefaultPasswordParameter(builder, $"{name}-secretAccessKey");
+            ?? new ParameterResource($"{name}-secretAccessKey", _ => autoSecretKey, secret: true);
         var adminTokenParam =
-            ParameterResourceBuilderExtensions.CreateDefaultPasswordParameter(builder, $"{name}-adminToken");
+            new ParameterResource($"{name}-adminToken", _ => autoAdminToken, secret: true);
 
         var resource = new GarageContainerResource(name, accessKeyIdParam, secretKeyParam);
+
+        // Write a minimal TOML config to a temp file and bind-mount it into the container.
+        // The official Garage image is scratch-based (no shell), so we cannot use a shell
+        // startup script. Garage reads /etc/garage.toml by default (GARAGE_RPC_SECRET and
+        // GARAGE_ADMIN_TOKEN are passed as env vars and override the corresponding config keys).
+        var configPath = WriteGarageConfig(name, GarageContainerResource.DefaultRegion);
 
         var resourceBuilder = builder
             .AddResource(resource)
@@ -78,9 +79,8 @@ public static class GarageBuilderExtensions
             .WithHttpEndpoint(targetPort: 3900, port: port, name: GarageContainerResource.S3EndpointName)
             .WithHttpEndpoint(targetPort: 3903, name: GarageContainerResource.AdminEndpointName)
             .WithEnvironment("GARAGE_RPC_SECRET", DevRpcSecret)
-            .WithEnvironment("GARAGE_ADMIN_TOKEN", $"{adminTokenParam}")
-            .WithEntrypoint("/bin/sh")
-            .WithArgs("-c", StartupCommand);
+            .WithEnvironment("GARAGE_ADMIN_TOKEN", adminTokenParam)
+            .WithBindMount(configPath, "/etc/garage.toml", isReadOnly: true);
 
         // Capture resolved credentials when the connection string becomes available.
         // The health check closures read these fields; null means the event has not fired yet.
@@ -180,7 +180,42 @@ public static class GarageBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrEmpty(region);
 
-        return builder.WithEnvironment(RegionEnvVarName, region);
+        builder.Resource.Region = region;
+        // Rewrite the config file so the new region is reflected before the container starts.
+        WriteGarageConfig(builder.Resource.Name, region);
+        return builder;
+    }
+
+    /// <summary>
+    /// Writes a minimal <c>garage.toml</c> config file to a host temp path and returns the path.
+    /// </summary>
+    /// <remarks>
+    /// The file is bind-mounted into the container at <c>/etc/garage.toml</c>.
+    /// Garage reads this on startup; secrets and the admin token are supplied via environment
+    /// variables so they never appear in the on-disk file.
+    /// </remarks>
+    private static string WriteGarageConfig(string resourceName, string region)
+    {
+        var configDir = Path.Combine(Path.GetTempPath(), "aspire-garage");
+        Directory.CreateDirectory(configDir);
+        var configPath = Path.Combine(configDir, $"{resourceName}.toml");
+        var config = $"""
+            metadata_dir = "/var/lib/garage/meta"
+            data_dir = "/var/lib/garage/data"
+            db_engine = "sqlite"
+            replication_factor = 1
+            rpc_bind_addr = "[::]:3901"
+            rpc_public_addr = "127.0.0.1:3901"
+
+            [s3_api]
+            api_bind_addr = "[::]:3900"
+            s3_region = "{region}"
+
+            [admin]
+            api_bind_addr = "[::]:3903"
+            """;
+        File.WriteAllText(configPath, config);
+        return configPath;
     }
 }
 

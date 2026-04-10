@@ -12,11 +12,9 @@ namespace CommunityToolkit.Aspire.Hosting.Garage;
 /// only when both provisioning steps have been confirmed, ensuring that any resource depending
 /// on the Garage container via <c>WaitFor</c> does not start until S3 is fully operational.
 /// </summary>
-internal sealed class GarageProvisioningHealthCheck : IHealthCheck
+internal sealed class GarageProvisioningHealthCheck : IHealthCheck, IDisposable
 {
-    // A single static HttpClient is safe here because this check is used in local dev only
-    // and there is exactly one instance per Garage resource within an Aspire host process.
-    private static readonly HttpClient s_httpClient = new();
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     private readonly EndpointReference _adminEndpoint;
     private readonly Func<string?> _adminToken;
@@ -60,25 +58,19 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
 
         try
         {
-            // ── Step 1: Basic liveness ─────────────────────────────────────────────
-            // GET /health requires no authentication and returns 200 when the daemon
-            // can handle requests, or 503 when it cannot.
-            using var healthResp = await s_httpClient
-                .GetAsync($"{baseUrl}/health", ct)
-                .ConfigureAwait(false);
-
-            if (!healthResp.IsSuccessStatusCode)
-            {
-                return HealthCheckResult.Unhealthy(
-                    $"Garage /health returned {(int)healthResp.StatusCode}.");
-            }
-
-            // ── Step 2: Layout check & idempotent assignment ───────────────────────
+            // ── Step 1: Layout check & idempotent assignment ───────────────────────
+            // Use the Admin API as the liveness probe: it works even before quorum is
+            // established, unlike GET /health which returns 503 until quorum is ready.
+            // A connection-refused exception (caught below) means the daemon is not up yet.
             using var layoutResp = await SendAsync(
                 HttpMethod.Get, $"{baseUrl}/v2/GetClusterLayout", adminToken, body: null, ct)
                 .ConfigureAwait(false);
 
-            layoutResp.EnsureSuccessStatusCode();
+            if (!layoutResp.IsSuccessStatusCode)
+            {
+                var errorBody = await layoutResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                return HealthCheckResult.Unhealthy($"GetClusterLayout failed ({(int)layoutResp.StatusCode}): {errorBody}");
+            }
 
             using var layoutDoc = await ParseJsonDocumentAsync(layoutResp, ct).ConfigureAwait(false);
             var layoutVersion = layoutDoc.RootElement.GetProperty("version").GetInt64();
@@ -91,7 +83,11 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
                     HttpMethod.Get, $"{baseUrl}/v2/GetClusterStatus", adminToken, body: null, ct)
                     .ConfigureAwait(false);
 
-                statusResp.EnsureSuccessStatusCode();
+                if (!statusResp.IsSuccessStatusCode)
+                {
+                    var errorBody = await statusResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return HealthCheckResult.Unhealthy($"GetClusterStatus failed ({(int)statusResp.StatusCode}): {errorBody}");
+                }
 
                 using var statusDoc = await ParseJsonDocumentAsync(statusResp, ct).ConfigureAwait(false);
                 var nodes = statusDoc.RootElement.GetProperty("nodes");
@@ -123,7 +119,11 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
                     HttpMethod.Post, $"{baseUrl}/v2/UpdateClusterLayout", adminToken, updateBody, ct)
                     .ConfigureAwait(false);
 
-                updateResp.EnsureSuccessStatusCode();
+                if (!updateResp.IsSuccessStatusCode)
+                {
+                    var errorBody = await updateResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return HealthCheckResult.Unhealthy($"UpdateClusterLayout failed ({(int)updateResp.StatusCode}): {errorBody}");
+                }
 
                 // Apply the staged layout changes. The version must be exactly currentVersion + 1.
                 var applyBody = JsonSerializer.Serialize(new { version = layoutVersion + 1 });
@@ -132,10 +132,19 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
                     HttpMethod.Post, $"{baseUrl}/v2/ApplyClusterLayout", adminToken, applyBody, ct)
                     .ConfigureAwait(false);
 
-                applyResp.EnsureSuccessStatusCode();
+                if (!applyResp.IsSuccessStatusCode)
+                {
+                    var errorBody = await applyResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return HealthCheckResult.Unhealthy($"ApplyClusterLayout failed ({(int)applyResp.StatusCode}): {errorBody}");
+                }
+
+                // Layout was just applied — return Unhealthy so Aspire retries, giving
+                // Garage time to converge quorum before we attempt key import and the
+                // final /health gate below.
+                return HealthCheckResult.Unhealthy("Cluster layout applied, waiting for quorum to stabilize.");
             }
 
-            // ── Step 3: Access key check & idempotent import ──────────────────────
+            // ── Step 2: Access key check & idempotent import ──────────────────────
             using var keyCheckResp = await SendAsync(
                 HttpMethod.Get,
                 $"{baseUrl}/v2/GetKeyInfo?id={Uri.EscapeDataString(accessKeyId)}",
@@ -156,7 +165,50 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
                     HttpMethod.Post, $"{baseUrl}/v2/ImportKey", adminToken, importBody, ct)
                     .ConfigureAwait(false);
 
-                importResp.EnsureSuccessStatusCode();
+                if (!importResp.IsSuccessStatusCode)
+                {
+                    var errorBody = await importResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return HealthCheckResult.Unhealthy($"ImportKey failed ({(int)importResp.StatusCode}): {errorBody}");
+                }
+
+                // Grant the imported key the right to create buckets.
+                var updateKeyBody = JsonSerializer.Serialize(new
+                {
+                    allow = new { createBucket = true }
+                });
+
+                using var updateKeyResp = await SendAsync(
+                    HttpMethod.Post, $"{baseUrl}/v2/UpdateKey?id={Uri.EscapeDataString(accessKeyId)}",
+                    adminToken, updateKeyBody, ct)
+                    .ConfigureAwait(false);
+
+                if (!updateKeyResp.IsSuccessStatusCode)
+                {
+                    var errorBody = await updateKeyResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return HealthCheckResult.Unhealthy($"UpdateKey (allow createBucket) failed ({(int)updateKeyResp.StatusCode}): {errorBody}");
+                }
+            }
+
+            // ── Step 3: Final quorum gate ──────────────────────────────────────────
+            // Only after both provisioning steps succeed do we check quorum health.
+            // Garage returns "unavailable" status until the layout has fully converged;
+            // returning Unhealthy here causes Aspire to retry automatically.
+            using var clusterHealthResp = await SendAsync(
+                HttpMethod.Get, $"{baseUrl}/v2/GetClusterHealth", adminToken, body: null, ct)
+                .ConfigureAwait(false);
+
+            if (!clusterHealthResp.IsSuccessStatusCode)
+            {
+                var body = await clusterHealthResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                return HealthCheckResult.Unhealthy(
+                    $"Garage GetClusterHealth returned {(int)clusterHealthResp.StatusCode}: {body}");
+            }
+
+            using var clusterHealthDoc = await ParseJsonDocumentAsync(clusterHealthResp, ct).ConfigureAwait(false);
+            var status = clusterHealthDoc.RootElement.GetProperty("status").GetString();
+            if (status != "healthy")
+            {
+                return HealthCheckResult.Unhealthy($"Garage cluster status: {status}");
             }
 
             return HealthCheckResult.Healthy("Garage is ready and provisioned.");
@@ -167,7 +219,7 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
         }
     }
 
-    private static async Task<HttpResponseMessage> SendAsync(
+    private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method, string url, string token, string? body, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(method, url);
@@ -178,7 +230,7 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         }
 
-        return await s_httpClient.SendAsync(request, ct).ConfigureAwait(false);
+        return await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
     }
 
     private static async Task<JsonDocument> ParseJsonDocumentAsync(
@@ -187,4 +239,7 @@ internal sealed class GarageProvisioningHealthCheck : IHealthCheck
         var json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         return JsonDocument.Parse(json);
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _httpClient.Dispose();
 }

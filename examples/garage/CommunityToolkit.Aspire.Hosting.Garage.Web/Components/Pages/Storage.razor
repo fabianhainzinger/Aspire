@@ -1,0 +1,344 @@
+@page "/storage"
+@rendermode InteractiveServer
+@inject GarageApiClient Api
+@inject IJSRuntime JS
+@using System.Text.RegularExpressions
+
+<PageTitle>Storage Browser</PageTitle>
+
+<h1>Storage Browser</h1>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger alert-dismissible">
+        @errorMessage
+        <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+    </div>
+}
+@if (!string.IsNullOrEmpty(statusMessage))
+{
+    <div class="alert alert-success alert-dismissible">
+        @statusMessage
+        <button type="button" class="btn-close" @onclick="() => statusMessage = null"></button>
+    </div>
+}
+
+<div class="row g-3">
+    <!-- ── Buckets panel ──────────────────────────────────────────── -->
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>Buckets</strong>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshBuckets" title="Refresh"><span class="bi bi-arrow-clockwise"></span></button>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="input-group @(bucketNameError != null ? "is-invalid-group" : "")">
+                        <input value="@newBucketName"
+                               @oninput="OnBucketNameInput"
+                               @onkeydown="OnNewBucketKeyDown"
+                               class="form-control form-control-sm @(bucketNameError != null ? "is-invalid" : (newBucketName.Length > 0 ? "is-valid" : ""))"
+                               placeholder="my-bucket-name"
+                               maxlength="63"
+                               spellcheck="false"
+                               autocomplete="off" />
+                        <button class="btn btn-primary btn-sm"
+                                @onclick="CreateBucket"
+                                disabled="@(bucketNameError != null || string.IsNullOrWhiteSpace(newBucketName) || busy)">
+                            <span class="bi bi-plus-lg"></span> Create
+                        </button>
+                    </div>
+                    @if (bucketNameError != null)
+                    {
+                        <div class="invalid-feedback d-block">@bucketNameError</div>
+                    }
+                    else
+                    {
+                        <small class="text-muted">3–63 lowercase letters, numbers, or hyphens. Must start and end with a letter or number.</small>
+                    }
+                </div>
+
+                @if (buckets == null)
+                {
+                    <div class="text-muted"><em>Loading…</em></div>
+                }
+                else if (buckets.Length == 0)
+                {
+                    <div class="text-muted fst-italic">No buckets yet.</div>
+                }
+                else
+                {
+                    <ul class="list-group list-group-flush">
+                        @foreach (var b in buckets)
+                        {
+                            <li class="list-group-item d-flex justify-content-between align-items-center px-0
+                                       @(b.BucketName == selectedBucket ? "fw-bold" : "")">
+                                <button class="btn btn-link p-0 text-start text-decoration-none"
+                                        @onclick="() => SelectBucketAsync(b.BucketName)">
+                                    <span class="bi bi-bucket me-1"></span>@b.BucketName
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger"
+                                        @onclick="() => ConfirmDeleteBucketAsync(b.BucketName)"
+                                        disabled="@busy"
+                                        title="Delete bucket"><span class="bi bi-trash3"></span></button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Objects panel ──────────────────────────────────────────── -->
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                @if (selectedBucket != null)
+                {
+                    <strong><span class="bi bi-bucket me-1"></span>@selectedBucket</strong>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => SelectBucketAsync(selectedBucket)" title="Refresh"><span class="bi bi-arrow-clockwise"></span></button>
+                }
+                else
+                {
+                    <strong class="text-muted">Select a bucket</strong>
+                }
+            </div>
+            <div class="card-body">
+                @if (selectedBucket == null)
+                {
+                    <p class="text-muted fst-italic">Click a bucket on the left to browse its objects.</p>
+                }
+                else
+                {
+                    <!-- Upload -->
+                    <div class="d-flex gap-2 mb-3 align-items-center">
+                        <InputFile OnChange="HandleFileSelected" class="form-control form-control-sm"
+                                   accept="*/*" disabled="@busy" />
+                        <button class="btn btn-primary btn-sm text-nowrap"
+                                @onclick="UploadFileAsync"
+                                disabled="@(selectedFile == null || busy)">
+                            <span class="bi bi-upload me-1"></span>Upload
+                        </button>
+                    </div>
+
+                    @if (objects == null)
+                    {
+                        <div class="text-muted"><em>Loading…</em></div>
+                    }
+                    else if (objects.Length == 0)
+                    {
+                        <p class="text-muted fst-italic">No objects in this bucket.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Key</th>
+                                        <th class="text-end">Size</th>
+                                        <th>Last Modified</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var obj in objects)
+                                    {
+                                        <tr>
+                                            <td class="font-monospace small">@obj.Key</td>
+                                            <td class="text-end text-muted small">@FormatSize(obj.Size)</td>
+                                            <td class="text-muted small">@obj.LastModified.ToLocalTime().ToString("g")</td>
+                                            <td class="text-end text-nowrap">
+                                                <a href="/download/@Uri.EscapeDataString(selectedBucket)/@Uri.EscapeDataString(obj.Key)"
+                                                   class="btn btn-sm btn-outline-primary"
+                                                   target="_blank"
+                                                   title="Download"><span class="bi bi-download"></span></a>
+                                                <button class="btn btn-sm btn-outline-danger"
+                                                        @onclick="() => ConfirmDeleteObjectAsync(obj.Key)"
+                                                        disabled="@busy"
+                                                        title="Delete"><span class="bi bi-trash3"></span></button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static readonly Regex ValidBucketName = new(@"^[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]$", RegexOptions.Compiled);
+    private static readonly Regex InvalidChars   = new(@"[^a-z0-9\-]", RegexOptions.Compiled);
+    private static readonly Regex ConsecHyphens  = new(@"-{2,}", RegexOptions.Compiled);
+
+    private GarageApiClient.BucketInfo[]? buckets;
+    private GarageApiClient.ObjectInfo[]? objects;
+    private string? selectedBucket;
+    private string newBucketName = "";
+    private string? bucketNameError;
+    private IBrowserFile? selectedFile;
+    private string? statusMessage;
+    private string? errorMessage;
+    private bool busy;
+
+    protected override async Task OnInitializedAsync() => await RefreshBuckets();
+
+    private async Task RefreshBuckets()
+    {
+        try
+        {
+            buckets = await Api.GetBucketsAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to load buckets: {ex.Message}";
+        }
+    }
+
+    private async Task SelectBucketAsync(string name)
+    {
+        selectedBucket = name;
+        objects = null;
+        try
+        {
+            objects = await Api.GetObjectsAsync(name);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to load objects: {ex.Message}";
+        }
+    }
+
+    private void OnBucketNameInput(ChangeEventArgs e)
+    {
+        // 1. lowercase + strip invalid characters
+        string raw = (e.Value?.ToString() ?? string.Empty).ToLowerInvariant();
+        raw = InvalidChars.Replace(raw, string.Empty);
+        // 2. collapse consecutive hyphens
+        raw = ConsecHyphens.Replace(raw, "-");
+        newBucketName = raw;
+        bucketNameError = ValidateBucketName(raw);
+    }
+
+    private static string? ValidateBucketName(string name)
+    {
+        if (name.Length == 0)  return null; // empty = not yet typed, no error shown
+        if (name.Length < 3)   return "Name must be at least 3 characters.";
+        if (name.Length > 63)  return "Name must be at most 63 characters.";
+        if (name[0] == '-')    return "Name must not start with a hyphen.";
+        if (name[^1] == '-')   return "Name must not end with a hyphen.";
+        if (!ValidBucketName.IsMatch(name)) return "Only lowercase letters, numbers, and hyphens are allowed.";
+        return null;
+    }
+
+    private async Task CreateBucket()
+    {
+        bucketNameError = ValidateBucketName(newBucketName);
+        if (bucketNameError != null || string.IsNullOrWhiteSpace(newBucketName)) return;
+        busy = true;
+        try
+        {
+            await Api.CreateBucketAsync(newBucketName);
+            statusMessage = $"Bucket '{newBucketName}' created.";
+            newBucketName = "";
+            bucketNameError = null;
+            await RefreshBuckets();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to create bucket: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private async Task OnNewBucketKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await CreateBucket();
+    }
+
+    private async Task ConfirmDeleteBucketAsync(string name)
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm",
+            $"Delete bucket '{name}' and ALL its objects? This cannot be undone.");
+        if (!confirmed) return;
+        await DeleteBucketAsync(name);
+    }
+
+    private async Task DeleteBucketAsync(string name)
+    {
+        busy = true;
+        try
+        {
+            await Api.DeleteBucketAsync(name);
+            if (selectedBucket == name) { selectedBucket = null; objects = null; }
+            statusMessage = $"Bucket '{name}' deleted.";
+            await RefreshBuckets();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to delete bucket: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private void HandleFileSelected(InputFileChangeEventArgs e) => selectedFile = e.File;
+
+    private async Task UploadFileAsync()
+    {
+        if (selectedFile == null || selectedBucket == null) return;
+        busy = true;
+        try
+        {
+            await using var stream = selectedFile.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
+            await Api.UploadObjectAsync(selectedBucket, selectedFile.Name, stream,
+                string.IsNullOrEmpty(selectedFile.ContentType)
+                    ? "application/octet-stream"
+                    : selectedFile.ContentType);
+            statusMessage = $"'{selectedFile.Name}' uploaded successfully.";
+            selectedFile = null;
+            await SelectBucketAsync(selectedBucket);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Upload failed: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private async Task ConfirmDeleteObjectAsync(string key)
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm",
+            $"Delete '{key}'? This cannot be undone.");
+        if (!confirmed) return;
+        await DeleteObjectAsync(key);
+    }
+
+    private async Task DeleteObjectAsync(string key)
+    {
+        if (selectedBucket == null) return;
+        busy = true;
+        try
+        {
+            await Api.DeleteObjectAsync(selectedBucket, key);
+            statusMessage = $"Object '{key}' deleted.";
+            await SelectBucketAsync(selectedBucket);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to delete object: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1_024                 => $"{bytes} B",
+        < 1_048_576             => $"{bytes / 1_024.0:F1} KB",
+        < 1_073_741_824         => $"{bytes / 1_048_576.0:F1} MB",
+        _                       => $"{bytes / 1_073_741_824.0:F1} GB"
+    };
+}

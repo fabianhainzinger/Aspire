@@ -129,6 +129,7 @@ public class GaragePublicApiTests
         Assert.Contains("Endpoint=http://localhost:3900", connectionString);
         Assert.Contains("AccessKey=GKtest123key", connectionString);
         Assert.Contains("SecretKey=GKtestSecret", connectionString);
+        Assert.Contains("Region=garage", connectionString);
     }
 
     [Fact]

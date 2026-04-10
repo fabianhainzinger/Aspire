@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\examples\garage\CommunityToolkit.Aspire.Hosting.Garage.AppHost\CommunityToolkit.Aspire.Hosting.Garage.AppHost.csproj" />
     <ProjectReference Include="..\..\src\CommunityToolkit.Aspire.Hosting.Garage\CommunityToolkit.Aspire.Hosting.Garage.csproj" />
     <ProjectReference Include="..\CommunityToolkit.Aspire.Testing\CommunityToolkit.Aspire.Testing.csproj" />
   </ItemGroup>

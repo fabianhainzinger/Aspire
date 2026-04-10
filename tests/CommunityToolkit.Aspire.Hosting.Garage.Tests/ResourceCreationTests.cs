@@ -90,9 +90,10 @@ public class ResourceCreationTests
         var resource = app.Services.GetRequiredService<DistributedApplicationModel>()
                           .Resources.OfType<GarageContainerResource>().Single();
 
-        var mount = Assert.Single(resource.Annotations.OfType<ContainerMountAnnotation>());
+        // AddGarage also adds a bind-mount for /etc/garage.toml, so filter by target.
+        var mount = resource.Annotations.OfType<ContainerMountAnnotation>()
+                            .Single(m => m.Target == "/var/lib/garage");
 
-        Assert.Equal("/var/lib/garage", mount.Target);
         Assert.Equal(ContainerMountType.Volume, mount.Type);
     }
 
@@ -108,7 +109,9 @@ public class ResourceCreationTests
         var resource = app.Services.GetRequiredService<DistributedApplicationModel>()
                           .Resources.OfType<GarageContainerResource>().Single();
 
-        var mount = Assert.Single(resource.Annotations.OfType<ContainerMountAnnotation>());
+        // AddGarage also adds a bind-mount for /etc/garage.toml, so filter by target.
+        var mount = resource.Annotations.OfType<ContainerMountAnnotation>()
+                            .Single(m => m.Target == "/var/lib/garage");
 
         Assert.Equal("my-garage-vol", mount.Source);
     }
@@ -125,9 +128,10 @@ public class ResourceCreationTests
         var resource = app.Services.GetRequiredService<DistributedApplicationModel>()
                           .Resources.OfType<GarageContainerResource>().Single();
 
-        var mount = Assert.Single(resource.Annotations.OfType<ContainerMountAnnotation>());
+        // AddGarage also adds a bind-mount for /etc/garage.toml, so filter by target.
+        var mount = resource.Annotations.OfType<ContainerMountAnnotation>()
+                            .Single(m => m.Target == "/var/lib/garage");
 
-        Assert.Equal("/var/lib/garage", mount.Target);
         Assert.Equal(ContainerMountType.BindMount, mount.Type);
     }
 
@@ -150,24 +154,23 @@ public class ResourceCreationTests
     }
 
     [Fact]
-    public void GarageResourceWithRegionAddsExtraEnvironmentAnnotation()
+    public async Task GarageResourceWithRegionReflectsRegionInConnectionString()
     {
         var builder = DistributedApplication.CreateBuilder();
-        var garageBuilder = builder.AddGarage("garage");
+        builder.AddGarage("garage").WithRegion("us-east-1");
 
         using var app = builder.Build();
 
         var resource = app.Services.GetRequiredService<DistributedApplicationModel>()
                           .Resources.OfType<GarageContainerResource>().Single();
 
-        var countBefore = resource.Annotations.OfType<EnvironmentCallbackAnnotation>().Count();
+        // Allocate an endpoint so the connection string can be resolved.
+        var s3Endpoint = resource.Annotations.OfType<EndpointAnnotation>().Single(a => a.Name == "s3api");
+        s3Endpoint.AllocatedEndpoint = new AllocatedEndpoint(s3Endpoint, "localhost", 3900);
 
-        // WithRegion must add exactly one more env annotation
-        garageBuilder.WithRegion("us-east-1");
+        var connectionString = await resource.GetConnectionStringAsync();
 
-        var countAfter = resource.Annotations.OfType<EnvironmentCallbackAnnotation>().Count();
-
-        Assert.True(countAfter > countBefore,
-            "WithRegion should add an environment annotation for GARAGE_INIT_S3_REGION");
+        Assert.NotNull(connectionString);
+        Assert.Contains("Region=us-east-1", connectionString);
     }
 }

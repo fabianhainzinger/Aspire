@@ -26,6 +26,12 @@ public sealed class GarageContainerResource(string name, ParameterResource acces
     /// </summary>
     public ParameterResource SecretAccessKey { get; } = secretAccessKey;
 
+    /// <summary>
+    /// Gets or sets the S3 region name. Defaults to <c>garage</c>.
+    /// Use <c>WithRegion</c> to override.
+    /// </summary>
+    internal string Region { get; set; } = DefaultRegion;
+
     private EndpointReference? _s3Endpoint;
     private EndpointReference? _adminEndpoint;
 
@@ -43,7 +49,7 @@ public sealed class GarageContainerResource(string name, ParameterResource acces
     /// Gets the connection string expression for the Garage container.
     /// </summary>
     /// <remarks>
-    /// Format: <c>Endpoint=http://{host}:{port};AccessKey={accessKeyId};SecretKey={secretAccessKey}</c>
+    /// Format: <c>Endpoint=http://{host}:{port};AccessKey={accessKeyId};SecretKey={secretAccessKey};Region={region}</c>
     /// </remarks>
     public ReferenceExpression ConnectionStringExpression => GetConnectionString();
 
@@ -72,6 +78,7 @@ public sealed class GarageContainerResource(string name, ParameterResource acces
             $"Endpoint=http://{S3Endpoint.Property(EndpointProperty.Host)}:{S3Endpoint.Property(EndpointProperty.Port)}");
         builder.Append($";AccessKey={AccessKeyId}");
         builder.Append($";SecretKey={SecretAccessKey}");
+        builder.Append($";Region={Region}");
 
         return builder.Build();
     }
@@ -84,6 +91,7 @@ public sealed class GarageContainerResource(string name, ParameterResource acces
         yield return new("SecretKey", ReferenceExpression.Create($"{SecretAccessKey}"));
         yield return new("Endpoint",  ReferenceExpression.Create(
             $"http://{S3Endpoint.Property(EndpointProperty.Host)}:{S3Endpoint.Property(EndpointProperty.Port)}"));
+        yield return new("Region",    ReferenceExpression.Create($"{Region}"));
     }
 }
 

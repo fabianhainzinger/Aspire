@@ -44,6 +44,12 @@
     <Project Path="examples/flyway/02.ContainerConfiguration/02.ContainerConfiguration.csproj" />
     <Project Path="examples/flyway/03.Repair/03.Repair.csproj" />
   </Folder>
+  <Folder Name="/examples/garage/">
+    <Project Path="examples/garage/CommunityToolkit.Aspire.Hosting.Garage.ApiService/CommunityToolkit.Aspire.Hosting.Garage.ApiService.csproj" />
+    <Project Path="examples/garage/CommunityToolkit.Aspire.Hosting.Garage.AppHost/CommunityToolkit.Aspire.Hosting.Garage.AppHost.csproj" />
+    <Project Path="examples/garage/CommunityToolkit.Aspire.Hosting.Garage.ServiceDefaults/CommunityToolkit.Aspire.Hosting.Garage.ServiceDefaults.csproj" />
+    <Project Path="examples/garage/CommunityToolkit.Aspire.Hosting.Garage.Web/CommunityToolkit.Aspire.Hosting.Garage.Web.csproj" />
+  </Folder>
   <Folder Name="/examples/goff/">
     <Project Path="examples/goff/CommunityToolkit.Aspire.Hosting.GoFeatureFlag.ApiService/CommunityToolkit.Aspire.Hosting.GoFeatureFlag.ApiService.csproj" />
     <Project Path="examples/goff/CommunityToolkit.Aspire.Hosting.GoFeatureFlag.AppHost/CommunityToolkit.Aspire.Hosting.GoFeatureFlag.AppHost.csproj" />
@@ -243,6 +249,7 @@
     <Project Path="src/CommunityToolkit.Aspire.Hosting.Stripe/CommunityToolkit.Aspire.Hosting.Stripe.csproj" />
     <Project Path="src/CommunityToolkit.Aspire.Hosting.SurrealDb/CommunityToolkit.Aspire.Hosting.SurrealDb.csproj" />
     <Project Path="src/CommunityToolkit.Aspire.Hosting.Zitadel/CommunityToolkit.Aspire.Hosting.Zitadel.csproj" />
+    <Project Path="src/CommunityToolkit.Aspire.Garage/CommunityToolkit.Aspire.Garage.csproj" />
     <Project Path="src/CommunityToolkit.Aspire.KurrentDB/CommunityToolkit.Aspire.KurrentDB.csproj" />
     <Project Path="src/CommunityToolkit.Aspire.MassTransit.RabbitMQ/CommunityToolkit.Aspire.MassTransit.RabbitMQ.csproj" />
     <Project Path="src/CommunityToolkit.Aspire.Meilisearch/CommunityToolkit.Aspire.Meilisearch.csproj" />
@@ -306,6 +313,7 @@
     <Project Path="tests/CommunityToolkit.Aspire.Hosting.Stripe.Tests/CommunityToolkit.Aspire.Hosting.Stripe.Tests.csproj" />
     <Project Path="tests/CommunityToolkit.Aspire.Hosting.SurrealDb.Tests/CommunityToolkit.Aspire.Hosting.SurrealDb.Tests.csproj" />
     <Project Path="tests/CommunityToolkit.Aspire.Hosting.Zitadel.Tests/CommunityToolkit.Aspire.Hosting.Zitadel.Tests.csproj" />
+    <Project Path="tests/CommunityToolkit.Aspire.Garage.Tests/CommunityToolkit.Aspire.Garage.Tests.csproj" />
     <Project Path="tests/CommunityToolkit.Aspire.KurrentDB.Tests/CommunityToolkit.Aspire.KurrentDB.Tests.csproj" />
     <Project Path="tests/CommunityToolkit.Aspire.MassTransit.RabbitMQ.Tests/CommunityToolkit.Aspire.MassTransit.RabbitMQ.Tests.csproj" />
     <Project Path="tests/CommunityToolkit.Aspire.Meilisearch.Tests/CommunityToolkit.Aspire.Meilisearch.Tests.csproj" />
